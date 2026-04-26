@@ -47,7 +47,7 @@ class AppState {
           final List<dynamic> decoded = json.decode(contactsJson);
           emergencyContactsNotifier.value = decoded.map((e) => Map<String, String>.from(e)).toList();
         } catch (e) {
-          debugPrint("Error loading emergency contacts: \$e");
+          debugPrint("Error loading emergency contacts: $e");
         }
       }
     }
@@ -71,7 +71,7 @@ class AppState {
         emergencyContactsNotifier.value = [];
       }
     } catch (e) {
-      debugPrint("Error loading contacts from Firestore: \$e");
+      debugPrint("Error loading contacts from Firestore: $e");
       // Fallback to local cache
       final contactsJson = prefs?.getString('emergencyContacts');
       if (contactsJson != null) {
@@ -119,9 +119,9 @@ class AppState {
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'emergencyContacts': contacts,
         }, SetOptions(merge: true));
-        debugPrint("Saved emergency contacts to Firestore for \${user.uid}");
+        debugPrint("Saved emergency contacts to Firestore for ${user.uid}");
       } catch (e) {
-        debugPrint("Error saving contacts to Firestore: \$e");
+        debugPrint("Error saving contacts to Firestore: $e");
       }
     }
   }

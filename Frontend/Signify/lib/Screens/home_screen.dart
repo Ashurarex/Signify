@@ -44,13 +44,55 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late Animation<double> _pulseAnimation;
   String _lastSpokenIntent = "";
 
+  // ── ML Pipeline Observability ──
+  bool _isApiOnline = false;
+  int _consecutiveFailures = 0;
+  static const int _maxConsecutiveFailures = 3;
+
+  /// Platform-aware API base URL.
+  /// Android emulator maps 10.0.2.2 → host machine's localhost.
+  /// Web/Desktop use 127.0.0.1 directly.
+  String get _apiBaseUrl {
+    if (kIsWeb) return 'http://127.0.0.1:8000';
+    // On a real Android device, you'd use your LAN IP.
+    // For emulator, 10.0.2.2 maps to host localhost.
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'http://10.0.2.2:8000';
+      default:
+        return 'http://127.0.0.1:8000';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _initCamerasList();
     _initTts();
+    _checkApiConnectivity(); // Pre-flight backend health check
     _pulseController = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
     _pulseAnimation = Tween<double>(begin: 0.1, end: 0.9).animate(_pulseController);
+  }
+
+  /// Pre-flight health check: pings the backend API root.
+  Future<void> _checkApiConnectivity() async {
+    debugPrint('[ML-PIPELINE] Checking API connectivity at $_apiBaseUrl ...');
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/'),
+      ).timeout(const Duration(seconds: 3));
+      if (mounted) {
+        setState(() {
+          _isApiOnline = response.statusCode == 200;
+        });
+      }
+      debugPrint('[ML-PIPELINE] API health check: ${_isApiOnline ? "ONLINE ✓" : "OFFLINE ✗ (status ${response.statusCode})"}');
+    } catch (e) {
+      debugPrint('[ML-PIPELINE] API health check FAILED: $e');
+      if (mounted) {
+        setState(() => _isApiOnline = false);
+      }
+    }
   }
 
   void _initTts() async {
@@ -63,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       cameras = await availableCameras();
     } catch (e) {
-      debugPrint("Camera listing error: \$e");
+      debugPrint("Camera listing error: $e");
     }
   }
 
@@ -132,6 +174,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _controller = CameraController(camera, ResolutionPreset.medium, enableAudio: false);
       await _controller!.initialize();
       
+      debugPrint('[ML-PIPELINE][CAMERA] Initialized: resolution=${_controller!.value.previewSize}, format=YUV420');
+      
       if (mounted) {
         setState(() {
           _isCameraActive = true;
@@ -139,10 +183,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         });
       }
     } catch (e) {
-      debugPrint("Camera initialization error: \$e");
+      debugPrint('[ML-PIPELINE][CAMERA] Initialization FAILED: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Camera error: \$e')),
+          SnackBar(content: Text('Camera error: $e')),
         );
       }
     }
@@ -163,8 +207,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _startGesture() {
+  void _startGesture() async {
     if (!_isCameraActive || _controller == null) return;
+
+    // Re-check API connectivity before starting the inference loop
+    await _checkApiConnectivity();
+    if (!_isApiOnline) {
+      debugPrint('[ML-PIPELINE] Cannot start gesture detection: API is offline.');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('⚠ Gesture recognition unavailable — backend API is offline.'),
+            backgroundColor: Colors.orange.shade700,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'RETRY',
+              textColor: Colors.white,
+              onPressed: _startGesture,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    debugPrint('[ML-PIPELINE] Starting gesture detection loop (600ms interval)');
+    _consecutiveFailures = 0;
     setState(() {
       _isGestureActive = true;
       _currentIntent = "Detecting gestures...";
@@ -191,24 +259,39 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     setState(() { _isDetecting = true; });
 
     try {
+      // ── Stage 1: Frame Capture ──
+      debugPrint('[ML-PIPELINE][1/5] Capturing camera frame...');
       final image = await _controller!.takePicture();
       final bytes = await image.readAsBytes();
-      final base64Image = base64Encode(bytes);
+      debugPrint('[ML-PIPELINE][2/5] Frame captured: ${bytes.length} bytes');
 
+      // ── Stage 2: Preprocessing (base64 encode) ──
+      final base64Image = base64Encode(bytes);
+      debugPrint('[ML-PIPELINE][3/5] Base64 encoded: ${base64Image.length} chars. Sending to $_apiBaseUrl/predict_image ...');
+
+      // ── Stage 3: Model Inference (HTTP) ──
       final response = await http.post(
-        Uri.parse('http://127.0.0.1:8000/predict_image'),
+        Uri.parse('$_apiBaseUrl/predict_image'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'image_base64': base64Image}),
-      ).timeout(const Duration(seconds: 2));
+      ).timeout(const Duration(seconds: 5));
 
+      debugPrint('[ML-PIPELINE][4/5] API response: status=${response.statusCode}, body=${response.body.length} chars');
+
+      // ── Stage 4: Output Parsing ──
       if (response.statusCode == 200) {
+        _consecutiveFailures = 0; // Reset on success
+        if (!_isApiOnline && mounted) setState(() => _isApiOnline = true);
+
         final data = jsonDecode(response.body);
+        debugPrint('[ML-PIPELINE][5/5] Parsed: intent=${data['intent']}, message=${data['message']}, static=${data['static_sign']}, dynamic=${data['dynamic_gesture']}');
+
         if (mounted) {
           setState(() {
             String newIntent = data['message'] ?? 'No clear gesture recognized.';
             _dynamicGesture = data['dynamic_gesture'] ?? '';
             
-            if (newIntent != _currentIntent && newIntent != 'No clear gesture recognized.') {
+            if (newIntent != _currentIntent && newIntent != 'No clear gesture recognized.' && newIntent != 'No hand detected') {
                _history.insert(0, newIntent);
                if (_history.length > 5) _history.removeLast();
                
@@ -222,7 +305,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                    if (hasVibrator == true) {
                      Vibration.vibrate(duration: 50);
                    }
-                 }).catchError((e) => debugPrint("Vibration error: \$e"));
+                 }).catchError((e) => debugPrint('[ML-PIPELINE] Vibration error: $e'));
                }
             }
             _currentIntent = newIntent;
@@ -233,13 +316,41 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             }
           });
         }
+      } else {
+        debugPrint('[ML-PIPELINE] ✗ Non-200 response: ${response.statusCode} — ${response.body}');
+        _handleInferenceFailure();
       }
     } catch (e) {
-      debugPrint("API error: \$e");
+      debugPrint('[ML-PIPELINE] ✗ Inference pipeline error: $e');
+      _handleInferenceFailure();
     } finally {
       if (mounted) {
         setState(() { _isDetecting = false; });
       }
+    }
+  }
+
+  /// Handles consecutive inference failures with user-facing feedback.
+  void _handleInferenceFailure() {
+    _consecutiveFailures++;
+    debugPrint('[ML-PIPELINE] Consecutive failures: $_consecutiveFailures / $_maxConsecutiveFailures');
+
+    if (_consecutiveFailures >= _maxConsecutiveFailures && mounted) {
+      setState(() => _isApiOnline = false);
+      _stopGesture();
+      setState(() => _currentIntent = 'Gesture recognition unavailable.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('❌ Gesture recognition unavailable — backend API is not responding.'),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'RETRY',
+            textColor: Colors.white,
+            onPressed: _startGesture,
+          ),
+        ),
+      );
     }
   }
 
@@ -274,6 +385,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
         
         // 1. Generate PDF (can be slow on web)
+        debugPrint('[CLOUD] Generating PDF...');
         final pdf = pw.Document();
         pdf.addPage(
           pw.Page(
@@ -284,8 +396,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 children: [
                   pw.Text('Signify - Medical / Legal Session Transcript', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
                   pw.SizedBox(height: 20),
-                  pw.Text('Date: \${DateTime.now().toLocal()}'),
-                  pw.Text('User ID: \$uid'),
+                  pw.Text('Date: ${DateTime.now().toLocal()}'),
+                  pw.Text('User ID: $uid'),
                   pw.SizedBox(height: 20),
                   pw.Text('Interpreted Gestures:', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
                   pw.SizedBox(height: 10),
@@ -296,20 +408,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         );
         final pdfBytes = await pdf.save();
+        debugPrint('[CLOUD] PDF generated: ${pdfBytes.length} bytes');
 
         // 2. Upload to Firebase Storage with timeout
-        final storageRef = FirebaseStorage.instance
-            .ref()
-            .child('users/\$uid/sessions/\$sessionId.pdf');
+        final storagePath = 'users/$uid/sessions/$sessionId.pdf';
+        debugPrint('[CLOUD] Uploading to Storage: $storagePath ...');
+        final storageRef = FirebaseStorage.instance.ref().child(storagePath);
         
         await storageRef.putData(
           pdfBytes,
           SettableMetadata(contentType: 'application/pdf'),
-        ).timeout(const Duration(seconds: 15));
+        ).timeout(const Duration(seconds: 60)); // Increased to 60s for slow connections
         
-        final downloadUrl = await storageRef.getDownloadURL().timeout(const Duration(seconds: 10));
+        debugPrint('[CLOUD] Upload complete. Getting download URL...');
+        final downloadUrl = await storageRef.getDownloadURL().timeout(const Duration(seconds: 20));
+        debugPrint('[CLOUD] URL retrieved: $downloadUrl');
 
         // 3. Save to Firestore with timeout
+        debugPrint('[CLOUD] Saving record to Firestore...');
         await FirebaseFirestore.instance
             .collection('users')
             .doc(uid)
@@ -319,7 +435,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           'timestamp': FieldValue.serverTimestamp(),
           'history': currentHistory,
           'pdfUrl': downloadUrl,
-        }).timeout(const Duration(seconds: 10));
+        }).timeout(const Duration(seconds: 20));
+        debugPrint('[CLOUD] Firestore record saved successfully.');
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -330,13 +447,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           );
         }
       } catch (e) {
-        debugPrint("Cloud save error: \$e");
+        debugPrint("[CLOUD] Critical Failure: $e");
+        String errorMsg = e.toString();
+        if (errorMsg.contains('TimeoutException')) {
+          errorMsg = "Request timed out. Check your network or Firebase CORS configuration.";
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
              SnackBar(
-               content: Text('❌ Cloud upload failed. Check Firebase Rules or Network. Error: \$e'),
+               content: Text('❌ Cloud upload failed. $errorMsg'),
                backgroundColor: Colors.red,
-               duration: const Duration(seconds: 5),
+               duration: const Duration(seconds: 8),
              ),
           );
         }
@@ -461,7 +582,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             trailing: ElevatedButton.icon(
                               onPressed: () async {
                                 final phone = contact['phone'] ?? '';
-                                final uri = Uri.parse('tel:\$phone');
+                                final uri = Uri.parse('tel:$phone');
                                 if (await canLaunchUrl(uri)) {
                                   await launchUrl(uri);
                                 }
@@ -633,17 +754,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     width: 12,
                                     height: 12,
                                     decoration: BoxDecoration(
-                                      color: _isGestureActive ? (_isDetecting ? Colors.orange : Colors.greenAccent) : Colors.grey,
+                                      color: !_isApiOnline
+                                          ? Colors.red
+                                          : _isGestureActive
+                                              ? (_isDetecting ? Colors.orange : Colors.greenAccent)
+                                              : Colors.grey,
                                       shape: BoxShape.circle,
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
-                                    _dynamicGesture.isNotEmpty ? 'Gesture: \$_dynamicGesture' : (_isGestureActive ? 'Status: Active' : 'Status: Idle'),
-                                    style: const TextStyle(
+                                    !_isApiOnline
+                                        ? 'API: Offline'
+                                        : _dynamicGesture.isNotEmpty
+                                            ? 'Gesture: $_dynamicGesture'
+                                            : (_isGestureActive ? 'Status: Active' : 'Status: Idle'),
+                                    style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.white70,
+                                      color: !_isApiOnline ? Colors.redAccent : Colors.white70,
                                     ),
                                   ),
                                   const Spacer(),
@@ -908,13 +1037,13 @@ class _LocationShareWidgetState extends State<_LocationShareWidget> {
         _status = "Sending alerts...";
       });
 
-      String mapsLink = "https://www.google.com/maps?q=\${position.latitude},\${position.longitude}";
-      String message = "Emergency! I need help. Here is my live location: \$mapsLink";
+      String mapsLink = "https://www.google.com/maps?q=${position.latitude},${position.longitude}";
+      String message = "Emergency! I need help. Here is my live location: $mapsLink";
 
       for (var contact in widget.contacts) {
         final phone = contact['phone'] ?? '';
         if (phone.isNotEmpty) {
-          final uri = Uri.parse('sms:\$phone?body=\${Uri.encodeComponent(message)}');
+          final uri = Uri.parse('sms:$phone?body=${Uri.encodeComponent(message)}');
           if (await canLaunchUrl(uri)) {
             await launchUrl(uri);
           }

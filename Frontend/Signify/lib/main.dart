@@ -11,7 +11,7 @@ void main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
   } catch (e) {
-    debugPrint("Firebase init error: \$e");
+    debugPrint("Firebase init error: $e");
   }
   runApp(const AppInitializer());
 }
@@ -47,7 +47,7 @@ class _AppInitializerState extends State<AppInitializer> {
         if (snapshot.hasError) {
           return MaterialApp(
             home: Scaffold(
-              body: Center(child: Text('Initialization Error: \${snapshot.error}')),
+              body: Center(child: Text('Initialization Error: ${snapshot.error}')),
             ),
           );
         }

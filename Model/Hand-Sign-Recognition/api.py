@@ -7,6 +7,15 @@ from typing import List
 from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
+import base64
+import numpy as np
+import cv2 as cv
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import os
+import urllib.request
+from fastapi.middleware.cors import CORSMiddleware
 
 from model import KeyPointClassifier, PointHistoryClassifier
 
@@ -29,7 +38,32 @@ history_length = 16
 point_history = deque(maxlen=history_length)
 finger_gesture_history = deque(maxlen=8)
 
+# Initialize MediaPipe Hand Landmarker
+model_path = 'model/hand_landmarker.task'
+if not os.path.exists(model_path):
+    print(f"Downloading {model_path}...")
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    urllib.request.urlretrieve('https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', model_path)
+
+base_options = python.BaseOptions(model_asset_path=model_path)
+options = vision.HandLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.IMAGE,
+    num_hands=1,
+    min_hand_detection_confidence=0.3,
+    min_hand_presence_confidence=0.3,
+    min_tracking_confidence=0.3)
+hands = vision.HandLandmarker.create_from_options(options)
+
 app = FastAPI(title="Hand Gesture Bridge API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():
@@ -48,6 +82,9 @@ class PredictRequest(BaseModel):
     landmarks: List[Landmark]
     image_width: int = 960
     image_height: int = 540
+
+class PredictImageRequest(BaseModel):
+    image_base64: str
 
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
@@ -207,7 +244,8 @@ def predict_intent(request: PredictRequest):
         "intent": intent,
         "message": message,
         "static_sign": hand_sign_text,
-        "dynamic_gesture": dynamic_text
+        "dynamic_gesture": dynamic_text,
+        "landmarks": [{"x": lm.x, "y": lm.y} for lm in request.landmarks]
     }
 
 @app.post("/reset")
@@ -216,6 +254,50 @@ def reset_state():
     point_history.clear()
     finger_gesture_history.clear()
     return {"message": "State reset successfully"}
+
+@app.post("/predict_image")
+def predict_image_intent(request: PredictImageRequest):
+    # Decode image
+    try:
+        if "," in request.image_base64:
+            base64_data = request.image_base64.split(",")[1]
+        else:
+            base64_data = request.image_base64
+        image_data = base64.b64decode(base64_data)
+        nparr = np.frombuffer(image_data, np.uint8)
+        image = cv.imdecode(nparr, cv.IMREAD_COLOR)
+        if image is None:
+            return {"error": "Invalid image"}
+        
+        image_height, image_width = image.shape[:2]
+    except Exception as e:
+        return {"error": str(e)}
+
+    # Process image with MediaPipe
+    image_rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+    results = hands.detect(mp_image)
+
+    if not results.hand_landmarks:
+        # Update empty history to clear gestures when hand disappears
+        global point_history
+        point_history.append([0] * 42)
+        return {
+            "intent": "None",
+            "message": "No hand detected",
+            "static_sign": "",
+            "dynamic_gesture": ""
+        }
+    
+    # Get the first hand's landmarks
+    hand_landmarks = results.hand_landmarks[0]
+    
+    formatted_landmarks = []
+    for lm in hand_landmarks:
+        formatted_landmarks.append(Landmark(x=lm.x, y=lm.y, z=lm.z))
+
+    predict_req = PredictRequest(landmarks=formatted_landmarks, image_width=image_width, image_height=image_height)
+    return predict_intent(predict_req)
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

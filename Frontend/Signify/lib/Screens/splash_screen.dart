@@ -1,8 +1,30 @@
 import 'package:flutter/material.dart';
-import '../widgets/custom_button.dart';
+import '../state/app_state.dart';
 
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _navigateToNext();
+  }
+
+  Future<void> _navigateToNext() async {
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+
+    if (AppState.isLoggedInNotifier.value) {
+      Navigator.pushReplacementNamed(context, '/home');
+    } else {
+      Navigator.pushReplacementNamed(context, '/login');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,13 +79,7 @@ class SplashScreen extends StatelessWidget {
                 color: Colors.brown[300],
               ),
               const Spacer(),
-              // Button
-              CustomButton(
-                text: 'Start Communicating',
-                onPressed: () {
-                  Navigator.pushReplacementNamed(context, '/login');
-                },
-              ),
+              const CircularProgressIndicator(color: Colors.brown),
               const SizedBox(height: 16),
             ],
           ),

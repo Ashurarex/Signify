@@ -1,8 +1,48 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../widgets/custom_button.dart';
 
-class EmergencySosScreen extends StatelessWidget {
+class EmergencySosScreen extends StatefulWidget {
   const EmergencySosScreen({super.key});
+
+  @override
+  State<EmergencySosScreen> createState() => _EmergencySosScreenState();
+}
+
+class _EmergencySosScreenState extends State<EmergencySosScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _sendEmergencySms();
+  }
+
+  Future<void> _sendEmergencySms() async {
+    final Uri smsUri = Uri(
+      scheme: 'sms',
+      path: '911', // Dummy emergency number
+      queryParameters: <String, String>{
+        'body': 'EMERGENCY! I need help. My current location is Goa, India.',
+      },
+    );
+    try {
+      if (await canLaunchUrl(smsUri)) {
+        await launchUrl(smsUri);
+      }
+    } catch (e) {
+      debugPrint("Could not launch SMS: \$e");
+    }
+  }
+
+  Future<void> _callEmergency() async {
+    final Uri telUri = Uri(scheme: 'tel', path: '911');
+    try {
+      if (await canLaunchUrl(telUri)) {
+        await launchUrl(telUri);
+      }
+    } catch (e) {
+      debugPrint("Could not launch Call: \$e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -115,9 +155,7 @@ class EmergencySosScreen extends StatelessWidget {
               CustomButton(
                 text: 'Call Emergency Services',
                 color: Colors.red,
-                onPressed: () {
-                  // Call logic
-                },
+                onPressed: _callEmergency,
               ),
               const SizedBox(height: 16),
               CustomButton(

@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "62367810101",
+    "project_id": "signify-eb72a",
+    "storage_bucket": "signify-eb72a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:62367810101:android:0d42fe376bfbeafff9e77c",
+        "android_client_info": {
+          "package_name": "com.example.signify"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "62367810101-fn8mffesaot08r2ealkejfcu0v95abcj.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDYXRUgaV6yx8v_8h06uW_KklmC_OzfMdg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "62367810101-fn8mffesaot08r2ealkejfcu0v95abcj.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

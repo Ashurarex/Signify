@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../state/app_state.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class UserProfileScreen extends StatefulWidget {
   const UserProfileScreen({super.key});
@@ -17,10 +18,16 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   @override
   void initState() {
     super.initState();
-    final name = AppState.prefs?.getString('user_name');
-    final email = AppState.prefs?.getString('user_email');
-    _nameController = TextEditingController(text: (name != null && name.isNotEmpty) ? name : 'User');
-    _emailController = TextEditingController(text: (email != null && email.isNotEmpty) ? email : 'No Email');
+    final fbUser = FirebaseAuth.instance.currentUser;
+    String finalName = fbUser?.displayName ?? AppState.prefs?.getString('user_name') ?? '';
+    String finalEmail = fbUser?.email ?? AppState.prefs?.getString('user_email') ?? '';
+
+    if (finalName.isEmpty) finalName = 'User';
+    if (finalEmail.isEmpty) finalEmail = 'No Email';
+
+    _nameController = TextEditingController(text: finalName);
+    _emailController = TextEditingController(text: finalEmail);
+    debugPrint("Profile loaded: ${_nameController.text} / ${_emailController.text}");
   }
 
   @override
@@ -32,6 +39,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final fbUser = FirebaseAuth.instance.currentUser;
+    String finalName = fbUser?.displayName ?? AppState.prefs?.getString('user_name') ?? '';
+    String finalEmail = fbUser?.email ?? AppState.prefs?.getString('user_email') ?? '';
+
+    if (finalName.isEmpty) finalName = 'User';
+    if (finalEmail.isEmpty) finalEmail = 'No Email';
+
+    if (!_isEditing) {
+      if (_nameController.text != finalName) _nameController.text = finalName;
+      if (_emailController.text != finalEmail) _emailController.text = finalEmail;
+    }
+
     return ValueListenableBuilder(
       valueListenable: AppState.localeNotifier,
       builder: (context, _, __) {

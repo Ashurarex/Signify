@@ -4,7 +4,6 @@ import 'Screens/splash_screen.dart';
 import 'Screens/login_screen.dart';
 import 'Screens/signup_screen.dart';
 import 'Screens/home_screen.dart';
-import 'Screens/emergency_sos_screen.dart';
 import 'Screens/user_profile_screen.dart';
 import 'Screens/settings_screen.dart';
 
@@ -63,7 +62,6 @@ class MyApp extends StatelessWidget {
                         '/login': (context) => const LoginScreen(),
                         '/signup': (context) => const SignupScreen(),
                         '/home': (context) => const HomeScreen(),
-                        '/sos': (context) => const EmergencySosScreen(),
                         '/profile': (context) => const UserProfileScreen(),
                         '/settings': (context) => const SettingsScreen(),
                       },

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:convert';
 
 class AppState {
   static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(
@@ -10,6 +13,7 @@ class AppState {
   );
   static final ValueNotifier<double> textScaleNotifier = ValueNotifier(1.0);
   static final ValueNotifier<bool> highContrastNotifier = ValueNotifier(false);
+  static final ValueNotifier<List<Map<String, String>>> emergencyContactsNotifier = ValueNotifier([]);
 
   // Auth State
   static final ValueNotifier<bool> isLoggedInNotifier = ValueNotifier(false);
@@ -32,6 +36,49 @@ class AppState {
 
     // Load Auth state
     isLoggedInNotifier.value = prefs?.getBool('isLoggedIn') ?? false;
+
+    // Load Emergency Contacts
+    if (isLoggedInNotifier.value) {
+      await _loadEmergencyContactsFromFirestore();
+    } else {
+      final contactsJson = prefs?.getString('emergencyContacts');
+      if (contactsJson != null) {
+        try {
+          final List<dynamic> decoded = json.decode(contactsJson);
+          emergencyContactsNotifier.value = decoded.map((e) => Map<String, String>.from(e)).toList();
+        } catch (e) {
+          debugPrint("Error loading emergency contacts: \$e");
+        }
+      }
+    }
+  }
+
+  static Future<void> _loadEmergencyContactsFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      emergencyContactsNotifier.value = [];
+      return;
+    }
+    
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists && doc.data()!.containsKey('emergencyContacts')) {
+        final List<dynamic> contactsData = doc.data()!['emergencyContacts'];
+        emergencyContactsNotifier.value = contactsData.map((e) => Map<String, String>.from(e as Map)).toList();
+        // Sync local cache
+        await prefs?.setString('emergencyContacts', json.encode(emergencyContactsNotifier.value));
+      } else {
+        emergencyContactsNotifier.value = [];
+      }
+    } catch (e) {
+      debugPrint("Error loading contacts from Firestore: \$e");
+      // Fallback to local cache
+      final contactsJson = prefs?.getString('emergencyContacts');
+      if (contactsJson != null) {
+        final List<dynamic> decoded = json.decode(contactsJson);
+        emergencyContactsNotifier.value = decoded.map((e) => Map<String, String>.from(e)).toList();
+      }
+    }
   }
 
   static Future<void> setTheme(ThemeMode mode) async {
@@ -57,48 +104,99 @@ class AppState {
     await prefs?.setDouble('textScale', value);
   }
 
+  static Future<void> saveEmergencyContacts(List<Map<String, String>> contacts) async {
+    emergencyContactsNotifier.value = List.from(contacts);
+    // create a new list reference so UI updates
+    emergencyContactsNotifier.notifyListeners();
+    
+    // Save to local cache
+    await prefs?.setString('emergencyContacts', json.encode(contacts));
+    
+    // Save to Firestore
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'emergencyContacts': contacts,
+        }, SetOptions(merge: true));
+        debugPrint("Saved emergency contacts to Firestore for \${user.uid}");
+      } catch (e) {
+        debugPrint("Error saving contacts to Firestore: \$e");
+      }
+    }
+  }
+
   static Future<void> login(String email, String password) async {
     final normalizedEmail = email.trim().toLowerCase();
     
-    final registeredEmail = prefs?.getString('user_email');
-    final registeredPassword = prefs?.getString('user_password');
-
-    print("DEBUG LOGIN: Fetched User -> Email: '\$registeredEmail', Pass: '\$registeredPassword'");
-    print("DEBUG LOGIN: Attempt -> Email: '\$normalizedEmail'");
-
-    if (registeredEmail == null || registeredEmail.isEmpty || registeredEmail != normalizedEmail) {
-      throw Exception('No account found. Please register.');
+    try {
+      final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: normalizedEmail,
+        password: password,
+      );
+      
+      final user = userCredential.user;
+      if (user != null) {
+        await prefs?.setString('user_name', user.displayName ?? 'User');
+        await prefs?.setString('user_email', user.email ?? normalizedEmail);
+        debugPrint("Logged in: ${user.displayName} / ${user.email}");
+      }
+      
+      isLoggedInNotifier.value = true;
+      await prefs?.setBool('isLoggedIn', true);
+      await _loadEmergencyContactsFromFirestore();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found') {
+        throw Exception('No account found. Please register.');
+      } else if (e.code == 'wrong-password') {
+        throw Exception('Incorrect password.');
+      } else {
+        throw Exception(e.message ?? 'Login failed. Please try again.');
+      }
+    } catch (e) {
+      throw Exception('An unexpected error occurred.');
     }
-
-    if (registeredPassword != password) {
-      throw Exception('Incorrect password');
-    }
-
-    isLoggedInNotifier.value = true;
-    await prefs?.setBool('isLoggedIn', true);
   }
 
-  static Future<void> register(
-    String name,
-    String email,
-    String password,
-  ) async {
+  static Future<void> register(String name, String email, String password) async {
     final normalizedEmail = email.trim().toLowerCase();
     
-    await prefs?.setString('user_name', name.trim());
-    await prefs?.setString('user_email', normalizedEmail);
-    await prefs?.setString('user_password', password);
-    
-    print("DEBUG REGISTER: Saved User -> Email: '\$normalizedEmail', Pass: '\$password'");
+    try {
+      UserCredential userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: normalizedEmail,
+        password: password,
+      );
+      
+      // Update display name
+      await userCredential.user?.updateDisplayName(name);
+      
+      await prefs?.setString('user_name', name);
+      await prefs?.setString('user_email', normalizedEmail);
+      debugPrint("Registered: $name / $normalizedEmail");
 
-    // Auto-login after registration
-    isLoggedInNotifier.value = true;
-    await prefs?.setBool('isLoggedIn', true);
+      isLoggedInNotifier.value = true;
+      await prefs?.setBool('isLoggedIn', true);
+      emergencyContactsNotifier.value = [];
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'weak-password') {
+        throw Exception('The password provided is too weak.');
+      } else if (e.code == 'email-already-in-use') {
+        throw Exception('The account already exists for that email.');
+      } else {
+        throw Exception(e.message ?? 'Registration failed. Please try again.');
+      }
+    } catch (e) {
+      throw Exception('An unexpected error occurred.');
+    }
   }
 
   static Future<void> logout() async {
+    await FirebaseAuth.instance.signOut();
     isLoggedInNotifier.value = false;
     await prefs?.setBool('isLoggedIn', false);
+    await prefs?.remove('user_name');
+    await prefs?.remove('user_email');
+    emergencyContactsNotifier.value = [];
   }
 
   static const Map<String, Map<String, String>> _translations = {

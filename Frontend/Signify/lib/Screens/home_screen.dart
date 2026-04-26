@@ -9,6 +9,17 @@ import 'dart:convert';
 import 'dart:async';
 import '../widgets/custom_button.dart';
 import '../state/app_state.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -232,13 +243,287 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  Future<void> _saveSessionToCloud() async {
+    if (_history.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No gesture history to save!')),
+      );
+      return;
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be logged in to save sessions.')),
+      );
+      return;
+    }
+
+    // Show non-blocking snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Uploading session to cloud in background...')),
+    );
+
+    // Capture context variables we need
+    final currentHistory = List<String>.from(_history);
+    final uid = user.uid;
+
+    // Run asynchronously to not block the UI
+    Future.microtask(() async {
+      try {
+        final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+        
+        // 1. Generate PDF (can be slow on web)
+        final pdf = pw.Document();
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat.a4,
+            build: (pw.Context context) {
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('Signify - Medical / Legal Session Transcript', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 20),
+                  pw.Text('Date: \${DateTime.now().toLocal()}'),
+                  pw.Text('User ID: \$uid'),
+                  pw.SizedBox(height: 20),
+                  pw.Text('Interpreted Gestures:', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 10),
+                  ...currentHistory.map((phrase) => pw.Bullet(text: phrase)).toList(),
+                ],
+              );
+            },
+          ),
+        );
+        final pdfBytes = await pdf.save();
+
+        // 2. Upload to Firebase Storage with timeout
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child('users/\$uid/sessions/\$sessionId.pdf');
+        
+        await storageRef.putData(
+          pdfBytes,
+          SettableMetadata(contentType: 'application/pdf'),
+        ).timeout(const Duration(seconds: 15));
+        
+        final downloadUrl = await storageRef.getDownloadURL().timeout(const Duration(seconds: 10));
+
+        // 3. Save to Firestore with timeout
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('sessions')
+            .doc(sessionId)
+            .set({
+          'timestamp': FieldValue.serverTimestamp(),
+          'history': currentHistory,
+          'pdfUrl': downloadUrl,
+        }).timeout(const Duration(seconds: 10));
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Session successfully saved to cloud!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint("Cloud save error: \$e");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+             SnackBar(
+               content: Text('❌ Cloud upload failed. Check Firebase Rules or Network. Error: \$e'),
+               backgroundColor: Colors.red,
+               duration: const Duration(seconds: 5),
+             ),
+          );
+        }
+      }
+    });
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
     _controller?.dispose();
     _flutterTts.stop();
     _pulseController.dispose();
+    _audioPlayer?.dispose();
     super.dispose();
+  }
+
+  AudioPlayer? _audioPlayer;
+  bool _isEmergencyDebounced = false;
+
+  void _triggerEmergency() {
+    if (_isEmergencyDebounced) return;
+    _isEmergencyDebounced = true;
+    _showEmergencyOverlay();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        _isEmergencyDebounced = false;
+      }
+    });
+  }
+
+  void _showEmergencyOverlay() {
+    _audioPlayer ??= AudioPlayer();
+    _audioPlayer!.setReleaseMode(ReleaseMode.loop);
+    _audioPlayer!.play(AssetSource('siren.ogg'));
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (BuildContext context) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.85,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade700,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: const Column(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, size: 64, color: Colors.white),
+                    SizedBox(height: 8),
+                    Text(
+                      'EMERGENCY MODE',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 4,
+                child: StatefulBuilder(
+                  builder: (BuildContext context, StateSetter setModalState) {
+                    return _LocationShareWidget(
+                      contacts: AppState.emergencyContactsNotifier.value,
+                    );
+                  }
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: ValueListenableBuilder<List<Map<String, String>>>(
+                  valueListenable: AppState.emergencyContactsNotifier,
+                  builder: (context, contacts, child) {
+                    if (contacts.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'No emergency contacts added.\nPlease add them in Settings.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 18, color: Colors.grey),
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      padding: const EdgeInsets.all(24),
+                      itemCount: contacts.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 16),
+                      itemBuilder: (context, index) {
+                        final contact = contacts[index];
+                        return Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.red.shade200, width: 2),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            leading: CircleAvatar(
+                              backgroundColor: Colors.red.shade100,
+                              child: Icon(Icons.person, color: Colors.red.shade700),
+                            ),
+                            title: Text(
+                              contact['name'] ?? '',
+                              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              contact['phone'] ?? '',
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                            trailing: ElevatedButton.icon(
+                              onPressed: () async {
+                                final phone = contact['phone'] ?? '';
+                                final uri = Uri.parse('tel:\$phone');
+                                if (await canLaunchUrl(uri)) {
+                                  await launchUrl(uri);
+                                }
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red.shade600,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              ),
+                              icon: const Icon(Icons.call),
+                              label: const Text('CALL'),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          _audioPlayer?.stop();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange.shade700,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                        icon: const Icon(Icons.volume_off, size: 28),
+                        label: const Text('STOP SIREN', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                        ),
+                        child: const Text('CLOSE EMERGENCY OVERLAY', style: TextStyle(fontSize: 18, color: Colors.grey)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ).then((_) {
+      _audioPlayer?.stop();
+    });
   }
 
   @override
@@ -255,6 +540,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.cloud_upload, color: Colors.brown),
+            tooltip: 'Save Session',
+            onPressed: _saveSessionToCloud,
+          ),
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.brown),
             onPressed: () {
@@ -448,9 +738,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             const SizedBox(height: 16),
             // Standalone Emergency Button
             InkWell(
-              onTap: () {
-                Navigator.pushNamed(context, '/sos');
-              },
+              onTap: _triggerEmergency,
               borderRadius: BorderRadius.circular(20),
               child: Container(
                 width: double.infinity,
@@ -537,3 +825,207 @@ class HudPainter extends CustomPainter {
   bool shouldRepaint(HudPainter oldDelegate) => true;
 }
 
+class _LocationShareWidget extends StatefulWidget {
+  final List<Map<String, String>> contacts;
+  
+  const _LocationShareWidget({required this.contacts});
+
+  @override
+  State<_LocationShareWidget> createState() => _LocationShareWidgetState();
+}
+
+class _LocationShareWidgetState extends State<_LocationShareWidget> {
+  String _status = "Initializing...";
+  bool _isLoading = true;
+  bool _hasError = false;
+  Position? _currentPosition;
+  final MapController _mapController = MapController();
+
+  @override
+  void initState() {
+    super.initState();
+    _processLocation();
+  }
+
+  Future<void> _processLocation() async {
+    try {
+      if (widget.contacts.isEmpty) {
+        setState(() {
+          _status = "No contacts to share location with.";
+          _isLoading = false;
+          _hasError = true;
+        });
+        return;
+      }
+
+      setState(() {
+        _status = "Checking location permissions...";
+      });
+
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          _status = "Location services are disabled.";
+          _isLoading = false;
+          _hasError = true;
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() {
+            _status = "Location permissions denied.";
+            _isLoading = false;
+            _hasError = true;
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        setState(() {
+          _status = "Location access is required to share your live location during emergencies.";
+          _isLoading = false;
+          _hasError = true;
+        });
+        return;
+      }
+
+      setState(() {
+        _status = "Fetching location...";
+      });
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 15),
+      );
+
+      setState(() {
+        _currentPosition = position;
+        _status = "Sending alerts...";
+      });
+
+      String mapsLink = "https://www.google.com/maps?q=\${position.latitude},\${position.longitude}";
+      String message = "Emergency! I need help. Here is my live location: \$mapsLink";
+
+      for (var contact in widget.contacts) {
+        final phone = contact['phone'] ?? '';
+        if (phone.isNotEmpty) {
+          final uri = Uri.parse('sms:\$phone?body=\${Uri.encodeComponent(message)}');
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri);
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _status = "Location shared successfully";
+          _isLoading = false;
+          _hasError = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _status = "Unable to fetch location";
+          _isLoading = false;
+          _hasError = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+          color: _hasError ? Colors.orange.shade100 : (_isLoading ? Colors.blue.shade50 : Colors.green.shade50),
+          child: Row(
+            children: [
+              if (_isLoading)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else if (_hasError)
+                const Icon(Icons.error_outline, color: Colors.orange)
+              else
+                const Icon(Icons.check_circle_outline, color: Colors.green),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _status,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _hasError ? Colors.orange.shade800 : (_isLoading ? Colors.blue.shade800 : Colors.green.shade800),
+                  ),
+                ),
+              ),
+              if (_hasError)
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _isLoading = true;
+                      _hasError = false;
+                    });
+                    _processLocation();
+                  },
+                  child: const Text('RETRY'),
+                ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _currentPosition != null
+              ? FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                    initialZoom: 16.0,
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.all,
+                    ),
+                  ),
+                  children: [
+                    TileLayer(
+                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.signify',
+                    ),
+                    MarkerLayer(
+                      markers: [
+                        Marker(
+                          point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                          width: 80,
+                          height: 80,
+                          child: const Icon(
+                            Icons.location_on,
+                            color: Colors.red,
+                            size: 48,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                )
+              : Container(
+                  color: Colors.grey.shade200,
+                  child: Center(
+                    child: _isLoading
+                        ? const CircularProgressIndicator()
+                        : const Icon(Icons.map, size: 64, color: Colors.grey),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}

@@ -47,5 +47,7 @@
 		<true />
 		<key>NSCameraUsageDescription</key>
 		<string>Camera access is required for gesture recognition</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Location access is required to share your live location during emergencies</string>
 	</dict>
 </plist>

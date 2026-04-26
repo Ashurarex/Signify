@@ -52,12 +52,20 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.handshake_rounded, size: 80, color: Colors.brown),
+                  const Icon(
+                    Icons.handshake_rounded,
+                    size: 80,
+                    color: Colors.brown,
+                  ),
                   const SizedBox(height: 24),
                   Text(
                     AppState.getString('welcome_back'),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.brown),
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.brown,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   const Text(
@@ -72,13 +80,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     decoration: InputDecoration(
                       labelText: AppState.getString('email'),
                       prefixIcon: const Icon(Icons.email_outlined),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       filled: true,
                       fillColor: Colors.white.withOpacity(0.5),
                     ),
                     validator: (value) {
-                      if (value == null || value.isEmpty) return 'Please enter your email';
-                      if (!value.contains('@')) return 'Please enter a valid email';
+                      if (value == null || value.isEmpty)
+                        return 'Please enter your email';
+                      if (!value.contains('@'))
+                        return 'Please enter a valid email';
                       return null;
                     },
                   ),
@@ -90,16 +102,26 @@ class _LoginScreenState extends State<LoginScreen> {
                       labelText: AppState.getString('password'),
                       prefixIcon: const Icon(Icons.lock_outline),
                       suffixIcon: IconButton(
-                        icon: Icon(_isPasswordVisible ? Icons.visibility_off : Icons.visibility),
-                        onPressed: () => setState(() => _isPasswordVisible = !_isPasswordVisible),
+                        icon: Icon(
+                          _isPasswordVisible
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () => setState(
+                          () => _isPasswordVisible = !_isPasswordVisible,
+                        ),
                       ),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       filled: true,
                       fillColor: Colors.white.withOpacity(0.5),
                     ),
                     validator: (value) {
-                      if (value == null || value.isEmpty) return 'Please enter your password';
-                      if (value.length < 6) return 'Password must be at least 6 characters';
+                      if (value == null || value.isEmpty)
+                        return 'Please enter your password';
+                      if (value.length < 6)
+                        return 'Password must be at least 6 characters';
                       return null;
                     },
                   ),
@@ -112,9 +134,16 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                   const SizedBox(height: 20),
                   TextButton(
-                    onPressed: () => Navigator.pushReplacementNamed(context, '/signup'),
-                    child: Text("Don't have an account? " + AppState.getString('signup'), style: const TextStyle(color: Colors.brown, fontWeight: FontWeight.w600)),
-                  )
+                    onPressed: () =>
+                        Navigator.pushReplacementNamed(context, '/signup'),
+                    child: Text(
+                      "Don't have an account? " + AppState.getString('signup'),
+                      style: const TextStyle(
+                        color: Colors.brown,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

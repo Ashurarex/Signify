@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -56,45 +57,47 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _startCamera() async {
-    // Check and request camera permissions
-    var status = await Permission.camera.status;
-    if (status.isDenied) {
-      status = await Permission.camera.request();
-    }
-
-    if (status.isPermanentlyDenied) {
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Camera Permission'),
-            content: const Text('Camera access is required for gesture recognition. Please enable it in the app settings.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  openAppSettings();
-                },
-                child: const Text('Open Settings'),
-              ),
-            ],
-          ),
-        );
+    // Check and request camera permissions (mobile only)
+    if (!kIsWeb) {
+      var status = await Permission.camera.status;
+      if (status.isDenied) {
+        status = await Permission.camera.request();
       }
-      return;
-    }
 
-    if (!status.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Camera permission is required to proceed.')),
-        );
+      if (status.isPermanentlyDenied) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Camera Permission'),
+              content: const Text('Camera access is required for gesture recognition. Please enable it in the app settings.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    openAppSettings();
+                  },
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
       }
-      return;
+
+      if (!status.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Camera permission is required to proceed.')),
+          );
+        }
+        return;
+      }
     }
 
     try {
@@ -203,11 +206,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                  _lastSpokenIntent = newIntent;
                }
 
-               Vibration.hasVibrator().then((hasVibrator) {
-                 if (hasVibrator == true) {
-                   Vibration.vibrate(duration: 50);
-                 }
-               });
+               if (!kIsWeb) {
+                 Vibration.hasVibrator().then((hasVibrator) {
+                   if (hasVibrator == true) {
+                     Vibration.vibrate(duration: 50);
+                   }
+                 }).catchError((e) => debugPrint("Vibration error: \$e"));
+               }
             }
             _currentIntent = newIntent;
             
@@ -531,3 +536,4 @@ class HudPainter extends CustomPainter {
   @override
   bool shouldRepaint(HudPainter oldDelegate) => true;
 }
+

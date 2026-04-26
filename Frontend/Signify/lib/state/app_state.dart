@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppState {
-  static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
-  static final ValueNotifier<Locale> localeNotifier = ValueNotifier(const Locale('en'));
+  static final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(
+    ThemeMode.light,
+  );
+  static final ValueNotifier<Locale> localeNotifier = ValueNotifier(
+    const Locale('en'),
+  );
   static final ValueNotifier<double> textScaleNotifier = ValueNotifier(1.0);
   static final ValueNotifier<bool> highContrastNotifier = ValueNotifier(false);
 
@@ -13,14 +17,16 @@ class AppState {
 
   static Future<void> init() async {
     prefs = await SharedPreferences.getInstance();
-    
+
     // Load Settings
     final savedTheme = prefs?.getString('themeMode') ?? 'light';
-    themeNotifier.value = savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;
-    
+    themeNotifier.value = savedTheme == 'dark'
+        ? ThemeMode.dark
+        : ThemeMode.light;
+
     final savedLocale = prefs?.getString('locale') ?? 'en';
     localeNotifier.value = Locale(savedLocale);
-    
+
     highContrastNotifier.value = prefs?.getBool('highContrast') ?? false;
     textScaleNotifier.value = prefs?.getDouble('textScale') ?? 1.0;
 
@@ -30,7 +36,10 @@ class AppState {
 
   static Future<void> setTheme(ThemeMode mode) async {
     themeNotifier.value = mode;
-    await prefs?.setString('themeMode', mode == ThemeMode.dark ? 'dark' : 'light');
+    await prefs?.setString(
+      'themeMode',
+      mode == ThemeMode.dark ? 'dark' : 'light',
+    );
   }
 
   static Future<void> setLocale(Locale locale) async {
@@ -49,26 +58,39 @@ class AppState {
   }
 
   static Future<void> login(String email, String password) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    
     final registeredEmail = prefs?.getString('user_email');
     final registeredPassword = prefs?.getString('user_password');
 
-    if (registeredEmail == null || registeredPassword == null) {
-      throw Exception('User not found. Please register first.');
+    print("DEBUG LOGIN: Fetched User -> Email: '\$registeredEmail', Pass: '\$registeredPassword'");
+    print("DEBUG LOGIN: Attempt -> Email: '\$normalizedEmail'");
+
+    if (registeredEmail == null || registeredEmail.isEmpty || registeredEmail != normalizedEmail) {
+      throw Exception('No account found. Please register.');
     }
 
-    if (registeredEmail == email && registeredPassword == password) {
-      isLoggedInNotifier.value = true;
-      await prefs?.setBool('isLoggedIn', true);
-    } else {
-      throw Exception('Invalid credentials.');
+    if (registeredPassword != password) {
+      throw Exception('Incorrect password');
     }
+
+    isLoggedInNotifier.value = true;
+    await prefs?.setBool('isLoggedIn', true);
   }
 
-  static Future<void> register(String name, String email, String password) async {
-    await prefs?.setString('user_name', name);
-    await prefs?.setString('user_email', email);
+  static Future<void> register(
+    String name,
+    String email,
+    String password,
+  ) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    
+    await prefs?.setString('user_name', name.trim());
+    await prefs?.setString('user_email', normalizedEmail);
     await prefs?.setString('user_password', password);
     
+    print("DEBUG REGISTER: Saved User -> Email: '\$normalizedEmail', Pass: '\$password'");
+
     // Auto-login after registration
     isLoggedInNotifier.value = true;
     await prefs?.setBool('isLoggedIn', true);
@@ -131,11 +153,12 @@ class AppState {
       'high_contrast': 'हाई कंट्रास्ट मोड',
       'text_size': 'टेक्स्ट का आकार',
       'preferences': 'प्राथमिकताएं',
-    }
+    },
   };
 
   static String getString(String key) {
-    return _translations[localeNotifier.value.languageCode]?[key] ?? 
-           _translations['en']?[key] ?? key;
+    return _translations[localeNotifier.value.languageCode]?[key] ??
+        _translations['en']?[key] ??
+        key;
   }
 }

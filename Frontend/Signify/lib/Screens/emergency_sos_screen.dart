@@ -74,11 +74,7 @@ class _EmergencySosScreenState extends State<EmergencySosScreen> {
                     ),
                   ],
                 ),
-                child: const Icon(
-                  Icons.sos,
-                  size: 80,
-                  color: Colors.white,
-                ),
+                child: const Icon(Icons.sos, size: 80, color: Colors.white),
               ),
               const SizedBox(height: 32),
               // Emergency Text
@@ -95,10 +91,7 @@ class _EmergencySosScreenState extends State<EmergencySosScreen> {
               Text(
                 'Alert sent to emergency contacts',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.red[300],
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.red[300]),
               ),
               const SizedBox(height: 32),
               // Location Card
@@ -119,10 +112,7 @@ class _EmergencySosScreenState extends State<EmergencySosScreen> {
                         children: [
                           const Text(
                             'Current Location',
-                            style: TextStyle(
-                              color: Colors.grey,
-                              fontSize: 12,
-                            ),
+                            style: TextStyle(color: Colors.grey, fontSize: 12),
                           ),
                           Text(
                             'Goa, India',
@@ -184,10 +174,7 @@ class _EmergencySosScreenState extends State<EmergencySosScreen> {
         const SizedBox(height: 8),
         Text(
           name,
-          style: const TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
         ),
       ],
     );
